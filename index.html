@@ -1,0 +1,332 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SOC Alert Monitor</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background: #1a1a1a;
+            color: #fff;
+            padding: 20px;
+            margin: 0;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+        }
+        .status {
+            padding: 20px;
+            background: #2a2a2a;
+            border-radius: 8px;
+            margin-bottom: 20px;
+        }
+        .alert-box {
+            padding: 20px;
+            background: #ff4444;
+            border-radius: 8px;
+            margin-top: 20px;
+            display: none;
+            animation: pulse 1s infinite;
+        }
+        .alert-box.active {
+            display: block;
+        }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.7; }
+        }
+        .status-indicator {
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            display: inline-block;
+            margin-right: 10px;
+        }
+        .status-indicator.active {
+            background: #4CAF50;
+            box-shadow: 0 0 10px #4CAF50;
+        }
+        .status-indicator.inactive {
+            background: #666;
+        }
+        .controls {
+            margin-top: 20px;
+        }
+        button {
+            padding: 10px 20px;
+            background: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            margin-right: 10px;
+            font-size: 16px;
+        }
+        button:hover {
+            background: #45a049;
+        }
+        .log {
+            background: #2a2a2a;
+            padding: 15px;
+            border-radius: 8px;
+            margin-top: 20px;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        .log-entry {
+            padding: 8px;
+            border-bottom: 1px solid #444;
+            font-size: 14px;
+        }
+        .config-warning {
+            background: #ff9800;
+            color: #000;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            font-weight: bold;
+        }
+        h1 {
+            font-size: 32px;
+            margin-bottom: 20px;
+        }
+        h3 {
+            margin-top: 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🚨 SOC Alert Monitor</h1>
+        
+        <div class="config-warning" id="configWarning">
+            ⚠️ Configuration Required: Please update the SCRIPT_URL in the code with your Google Apps Script URL
+        </div>
+        
+        <div class="status">
+            <span class="status-indicator" id="statusIndicator"></span>
+            <span id="statusText">Initializing...</span>
+            <br><br>
+            <strong>Last Check:</strong> <span id="lastCheck">-</span><br>
+            <strong>Last Alert:</strong> <span id="lastAlert">No alerts</span>
+        </div>
+
+        <div class="controls">
+            <button onclick="testSound()">🔊 Test Sound</button>
+            <button onclick="toggleMonitoring()" id="toggleBtn">Pause Monitoring</button>
+            <button onclick="clearLog()">Clear Log</button>
+        </div>
+
+        <div class="alert-box" id="alertBox">
+            <h2>⚠️ NEW ALERT</h2>
+            <div id="alertContent"></div>
+        </div>
+
+        <div class="log">
+            <h3>Activity Log</h3>
+            <div id="logContainer"></div>
+        </div>
+    </div>
+
+    <!-- Alert Sound -->
+    <audio id="alertSound" preload="auto">
+        <source src="https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3" type="audio/mpeg">
+    </audio>
+
+    <script>
+        // ============================================
+        // CONFIGURATION SECTION
+        // ============================================
+        
+        // TODO: Replace this URL with your Google Apps Script URL
+        const SCRIPT_URL = 'YOUR_GOOGLE_APPS_SCRIPT_URL_HERE';
+        
+        // How often to check for new alerts (milliseconds)
+        const POLL_INTERVAL = 5000; // 5 seconds
+        
+        // ============================================
+        // DO NOT EDIT BELOW THIS LINE
+        // ============================================
+        
+        let isMonitoring = true;
+        let lastAlertTimestamp = null;
+        let pollTimer = null;
+
+        // Initialize the application
+        function init() {
+            // Check if URL is configured
+            if (SCRIPT_URL === 'YOUR_GOOGLE_APPS_SCRIPT_URL_HERE') {
+                updateStatus('inactive', 'Configuration required - see warning above');
+                addLog('ERROR: Please configure SCRIPT_URL in the code', 'error');
+                document.getElementById('toggleBtn').disabled = true;
+                return;
+            }
+            
+            // Hide warning if configured
+            document.getElementById('configWarning').style.display = 'none';
+            
+            updateStatus('active', 'Monitoring active');
+            startMonitoring();
+            addLog('System started - monitoring every ' + (POLL_INTERVAL/1000) + ' seconds');
+        }
+
+        // Start monitoring for alerts
+        function startMonitoring() {
+            if (pollTimer) clearInterval(pollTimer);
+            pollTimer = setInterval(checkForAlerts, POLL_INTERVAL);
+            checkForAlerts(); // Check immediately on start
+        }
+
+        // Check Google Sheet for new alerts
+        async function checkForAlerts() {
+            if (!isMonitoring) return;
+            
+            if (SCRIPT_URL === 'YOUR_GOOGLE_APPS_SCRIPT_URL_HERE') {
+                return;
+            }
+
+            try {
+                document.getElementById('lastCheck').textContent = new Date().toLocaleTimeString();
+                
+                const response = await fetch(SCRIPT_URL);
+                
+                if (!response.ok) {
+                    throw new Error('HTTP ' + response.status);
+                }
+                
+                const data = await response.json();
+                
+                // If no alerts yet
+                if (data.status === 'no_alerts') {
+                    return;
+                }
+
+                // Parse timestamp
+                const alertTimestamp = new Date(data.timestamp).getTime();
+                
+                // Check if this is a new alert (not seen before)
+                if (lastAlertTimestamp === null || alertTimestamp > lastAlertTimestamp) {
+                    lastAlertTimestamp = alertTimestamp;
+                    triggerAlert(data);
+                }
+                
+            } catch (error) {
+                console.error('Error checking alerts:', error);
+                addLog('Error connecting to server: ' + error.message, 'error');
+            }
+        }
+
+        // Trigger alert with sound and visual notification
+        function triggerAlert(data) {
+            // Play alert sound
+            const audio = document.getElementById('alertSound');
+            audio.play().catch(e => {
+                console.log('Sound play failed (user interaction may be required):', e);
+                addLog('⚠️ Sound blocked - click anywhere on page to enable', 'error');
+            });
+            
+            // Show red alert box
+            const alertBox = document.getElementById('alertBox');
+            const alertContent = document.getElementById('alertContent');
+            alertContent.innerHTML = `
+                <strong>${data.alertName}</strong><br>
+                ${data.message}<br>
+                <small>Severity: ${data.severity}</small><br>
+                <small>${new Date(data.timestamp).toLocaleString()}</small>
+            `;
+            alertBox.classList.add('active');
+            
+            // Update last alert display in status box
+            document.getElementById('lastAlert').textContent = 
+                `${data.alertName} - ${new Date(data.timestamp).toLocaleTimeString()}`;
+            
+            // Add to activity log
+            addLog(`🚨 ALERT: ${data.alertName}`, 'alert');
+            
+            // Hide alert box after 10 seconds
+            setTimeout(() => {
+                alertBox.classList.remove('active');
+            }, 10000);
+        }
+
+        // Test sound button
+        function testSound() {
+            const audio = document.getElementById('alertSound');
+            audio.play().then(() => {
+                addLog('✅ Test sound played successfully');
+            }).catch(e => {
+                addLog('❌ Sound test failed - ' + e.message, 'error');
+            });
+        }
+
+        // Toggle monitoring on/off
+        function toggleMonitoring() {
+            isMonitoring = !isMonitoring;
+            const btn = document.getElementById('toggleBtn');
+            
+            if (isMonitoring) {
+                btn.textContent = 'Pause Monitoring';
+                updateStatus('active', 'Monitoring active');
+                startMonitoring();
+                addLog('Monitoring resumed');
+            } else {
+                btn.textContent = 'Resume Monitoring';
+                updateStatus('inactive', 'Monitoring paused');
+                clearInterval(pollTimer);
+                addLog('Monitoring paused');
+            }
+        }
+
+        // Update status indicator
+        function updateStatus(status, text) {
+            const indicator = document.getElementById('statusIndicator');
+            const statusText = document.getElementById('statusText');
+            indicator.className = 'status-indicator ' + status;
+            statusText.textContent = text;
+        }
+
+        // Add entry to activity log
+        function addLog(message, type = 'info') {
+            const logContainer = document.getElementById('logContainer');
+            const entry = document.createElement('div');
+            entry.className = 'log-entry';
+            
+            const timestamp = new Date().toLocaleTimeString();
+            entry.innerHTML = `<small>${timestamp}</small> - ${message}`;
+            
+            // Color coding
+            if (type === 'alert') entry.style.color = '#ff4444';
+            if (type === 'error') entry.style.color = '#ff9800';
+            if (type === 'success') entry.style.color = '#4CAF50';
+            
+            // Add to top of log
+            logContainer.insertBefore(entry, logContainer.firstChild);
+            
+            // Keep only last 50 entries
+            while (logContainer.children.length > 50) {
+                logContainer.removeChild(logContainer.lastChild);
+            }
+        }
+
+        // Clear activity log
+        function clearLog() {
+            document.getElementById('logContainer').innerHTML = '';
+            addLog('Log cleared');
+        }
+
+        // Start monitoring when page loads
+        window.onload = init;
+        
+        // Log page visibility changes
+        document.addEventListener('visibilitychange', function() {
+            if (document.hidden) {
+                addLog('Page hidden - monitoring continues in background');
+            } else {
+                addLog('Page visible again');
+            }
+        });
+    </script>
+</body>
+</html>
